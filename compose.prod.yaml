@@ -7,11 +7,12 @@
 #
 #   1. Generate an app key:   docker run --rm ghcr.io/trypostit/trypost:latest php artisan key:generate --show
 #      Set it as APP_KEY.
-#   2. Set APP_URL, DB_PASSWORD and REVERB_APP_SECRET.
+#   2. Set APP_URL, DB_URL, REDIS_URL and REVERB_APP_SECRET.
 #   3. Start:                 docker compose -f compose.prod.yaml up -d
 #
-# This pulls the published image — no local build. Postgres, Redis, the queue
-# workers, the scheduler and the WebSocket server all run for you.
+# This pulls the published image — no local build. PostgreSQL and Redis are
+# external (Coolify-managed databases); the app must share their Docker network.
+# The queue workers, the scheduler and the WebSocket server run in the app.
 
 services:
   app:
@@ -27,17 +28,16 @@ services:
       SELF_HOSTED: ${SELF_HOSTED:-true}
       TRYPOST_TARGET: ${TRYPOST_TARGET:-production}
 
-      # ===== Database (bundled postgres service below) =====
+      # ===== Database (external Coolify PostgreSQL) =====
+      # Coolify's "Postgres URL (internal)", e.g. postgres://user:pass@host:5432/db
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
-      DB_HOST: ${DB_HOST:-pgsql}
-      DB_PORT: ${DB_PORT:-5432}
-      DB_DATABASE: ${DB_DATABASE:-trypost}
-      DB_USERNAME: ${DB_USERNAME:-trypost}
-      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_URL: ${DB_URL:?DB_URL is required}
 
-      # ===== Redis / queue / cache / broadcasting =====
-      REDIS_HOST: ${REDIS_HOST:-redis}
-      REDIS_PORT: ${REDIS_PORT:-6379}
+      # ===== Redis / queue / cache / broadcasting (external Coolify Redis) =====
+      # Coolify's "Redis URL (internal)" WITHOUT the trailing /0, e.g.
+      # redis://default:pass@host:6379 — a path pins every Redis connection to
+      # one database, so a cache clear would also wipe the queue.
+      REDIS_URL: ${REDIS_URL:?REDIS_URL is required}
       QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
       CACHE_STORE: ${CACHE_STORE:-redis}
       SESSION_DRIVER: ${SESSION_DRIVER:-database}
@@ -124,38 +124,11 @@ services:
       - "8080"    # Reverb WebSocket
     volumes:
       - storage:/var/www/html/storage/app
-    depends_on:
-      pgsql:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  pgsql:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: ${DB_DATABASE:-trypost}
-      POSTGRES_USER: ${DB_USERNAME:-trypost}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    command: redis-server --appendonly yes
-    volumes:
-      - redisdata:/data
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 10s
-      timeout: 3s
-      retries: 5
+    # "coolify" is where Coolify-managed Postgres/Redis live, so the hosts in
+    # DB_URL / REDIS_URL resolve from here.
+    networks:
+      - default
+      - coolify
 
   # Optional reverse proxy with automatic HTTPS (Let's Encrypt).
   # Not needed on Coolify — its own proxy handles domains and TLS.
@@ -180,9 +153,12 @@ services:
     depends_on:
       - app
 
+networks:
+  coolify:
+    external: true
+    name: ${COOLIFY_NETWORK:-coolify}
+
 volumes:
-  pgdata:
-  redisdata:
   storage:
   caddy-data:
   caddy-config:
