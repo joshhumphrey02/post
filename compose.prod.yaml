@@ -129,29 +129,9 @@ services:
     networks:
       - default
       - coolify
-
-  # Optional reverse proxy with automatic HTTPS (Let's Encrypt).
-  # Not needed on Coolify — its own proxy handles domains and TLS.
-  # To serve on a domain elsewhere:
-  #   1. Point the domain's DNS at this host.
-  #   2. Set APP_DOMAIN and APP_URL (https://<that domain>).
-  #   3. Start with the proxy profile:
-  #        docker compose -f compose.prod.yaml --profile proxy up -d
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    profiles: [proxy]
-    environment:
-      APP_DOMAIN: ${APP_DOMAIN:-post.example.com}
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on:
-      - app
+    # The app sits on two networks; tell Coolify's Traefik which one it shares.
+    labels:
+      - traefik.docker.network=${COOLIFY_NETWORK:-coolify}
 
 networks:
   coolify:
@@ -160,5 +140,3 @@ networks:
 
 volumes:
   storage:
-  caddy-data:
-  caddy-config:
