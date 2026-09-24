@@ -7,30 +7,28 @@
 #
 #   1. Generate an app key:   echo "base64:$(openssl rand -base64 32)"
 #      Set it as APP_KEY.
-#   2. Set APP_URL, APP_DOMAIN, DB_URL, REDIS_URL and REVERB_APP_SECRET.
-#   3. Start:                 docker compose -f compose.prod.yaml up -d --build
+#   2. Set APP_URL, DB_URL, REDIS_URL and REVERB_APP_SECRET.
+#   3. Start:                 docker compose -f compose.prod.yaml up -d
 #
-# The image is built from this repository (docker/Dockerfile, production
-# stage) so the browser bundle points WebSockets at APP_DOMAIN. PostgreSQL and
-# Redis are external (Coolify-managed databases); the app must share their
-# Docker network. The queue workers, the scheduler and the WebSocket server
-# run in the app.
+# This pulls the published image — no local build. PostgreSQL and Redis are
+# external (Coolify-managed databases); the app must share their Docker
+# network. The queue workers, the scheduler and the WebSocket server run in
+# the app.
 
 services:
   app:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile
-      target: production
-      args:
-        # The browser connects to wss://<APP_DOMAIN>/app/<key>; nginx in the
-        # container proxies /app/ to Reverb, so no separate WebSocket domain.
-        VITE_APP_NAME: ${APP_NAME:-TryPost}
-        VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}
-        VITE_REVERB_HOST: ${APP_DOMAIN:?APP_DOMAIN is required, e.g. post.yourdomain.com}
-        VITE_REVERB_PORT: ${VITE_REVERB_PORT:-443}
-        VITE_REVERB_SCHEME: ${VITE_REVERB_SCHEME:-https}
+    image: ghcr.io/trypostit/trypost:latest
     restart: unless-stopped
+    # The published image's entrypoint waits for Postgres with
+    # `pg_isready -h $DB_HOST ...` and ignores DB_URL, so it would block on the
+    # default host "pgsql". Derive the split DB_* vars from DB_URL first, then
+    # hand off to the stock entrypoint. ($$ escapes $ from compose.)
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        eval "$$(php -r '$$u = parse_url((string) getenv("DB_URL")); foreach (["DB_HOST" => $$u["host"] ?? "", "DB_PORT" => $$u["port"] ?? 5432, "DB_USERNAME" => $$u["user"] ?? "postgres", "DB_DATABASE" => ltrim($$u["path"] ?? "/postgres", "/")] as $$k => $$v) { echo "export {$$k}=".escapeshellarg((string) $$v)."\n"; }')"
+        exec /usr/local/bin/entrypoint.sh
     environment:
       # ===== Required =====
       APP_NAME: ${APP_NAME:-TryPost}
@@ -58,10 +56,10 @@ services:
 
       # ===== WebSockets (Reverb) =====
       # REVERB_HOST/PORT/SCHEME are how the app itself reaches Reverb inside
-      # the container — keep them on localhost:8080. The browser side is set by
-      # the build args above.
+      # the container — keep them on localhost:8080. The published image bakes
+      # the browser side at localhost:8080, so live updates need a custom build.
       REVERB_APP_ID: ${REVERB_APP_ID:-1001}
-      REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}   # also baked into the bundle via VITE_REVERB_APP_KEY
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}   # must match the key baked into the published image
       REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET is required}
       REVERB_HOST: ${REVERB_HOST:-localhost}
       REVERB_PORT: ${REVERB_PORT:-8080}
