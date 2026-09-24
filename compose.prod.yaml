@@ -16,7 +16,6 @@
 services:
   app:
     image: ghcr.io/trypostit/trypost:latest
-    container_name: trypost
     restart: unless-stopped
     environment:
       # ===== Required =====
@@ -116,9 +115,13 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-    ports:
-      - "${APP_PORT:-8000}:80"         # app (nginx)
-      - "${REVERB_PUBLIC_PORT:-8080}:8080"   # Reverb WebSocket
+    # No host ports: Coolify's proxy reaches these over the internal network.
+    # Assign domains in Coolify as https://<app-domain>:80 and
+    # https://<ws-domain>:8080. Outside Coolify, replace with
+    # ports: ["8000:80", "8080:8080"].
+    expose:
+      - "80"      # app (nginx)
+      - "8080"    # Reverb WebSocket
     volumes:
       - storage:/var/www/html/storage/app
     depends_on:
@@ -129,7 +132,6 @@ services:
 
   pgsql:
     image: postgres:16-alpine
-    container_name: trypost-pgsql
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_DATABASE:-trypost}
@@ -145,7 +147,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: trypost-redis
     restart: unless-stopped
     command: redis-server --appendonly yes
     volumes:
@@ -165,7 +166,6 @@ services:
   #        docker compose -f compose.prod.yaml --profile proxy up -d
   caddy:
     image: caddy:2-alpine
-    container_name: trypost-caddy
     restart: unless-stopped
     profiles: [proxy]
     environment:
