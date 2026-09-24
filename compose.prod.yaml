@@ -5,18 +5,31 @@
 # are required and the stack refuses to start without them; ${VAR:-default}
 # falls back to the default shown.
 #
-#   1. Generate an app key:   docker run --rm ghcr.io/trypostit/trypost:latest php artisan key:generate --show
+#   1. Generate an app key:   echo "base64:$(openssl rand -base64 32)"
 #      Set it as APP_KEY.
-#   2. Set APP_URL, DB_URL, REDIS_URL and REVERB_APP_SECRET.
-#   3. Start:                 docker compose -f compose.prod.yaml up -d
+#   2. Set APP_URL, APP_DOMAIN, DB_URL, REDIS_URL and REVERB_APP_SECRET.
+#   3. Start:                 docker compose -f compose.prod.yaml up -d --build
 #
-# This pulls the published image — no local build. PostgreSQL and Redis are
-# external (Coolify-managed databases); the app must share their Docker network.
-# The queue workers, the scheduler and the WebSocket server run in the app.
+# The image is built from this repository (docker/Dockerfile, production
+# stage) so the browser bundle points WebSockets at APP_DOMAIN. PostgreSQL and
+# Redis are external (Coolify-managed databases); the app must share their
+# Docker network. The queue workers, the scheduler and the WebSocket server
+# run in the app.
 
 services:
   app:
-    image: ghcr.io/trypostit/trypost:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: production
+      args:
+        # The browser connects to wss://<APP_DOMAIN>/app/<key>; nginx in the
+        # container proxies /app/ to Reverb, so no separate WebSocket domain.
+        VITE_APP_NAME: ${APP_NAME:-TryPost}
+        VITE_REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}
+        VITE_REVERB_HOST: ${APP_DOMAIN:?APP_DOMAIN is required, e.g. post.yourdomain.com}
+        VITE_REVERB_PORT: ${VITE_REVERB_PORT:-443}
+        VITE_REVERB_SCHEME: ${VITE_REVERB_SCHEME:-https}
     restart: unless-stopped
     environment:
       # ===== Required =====
@@ -44,11 +57,11 @@ services:
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
 
       # ===== WebSockets (Reverb) =====
-      # The published image bakes the client at localhost:8080. For a custom
-      # domain, rebuild the image with --build-arg VITE_REVERB_HOST=<domain>
-      # VITE_REVERB_PORT=443 VITE_REVERB_SCHEME=https.
+      # REVERB_HOST/PORT/SCHEME are how the app itself reaches Reverb inside
+      # the container — keep them on localhost:8080. The browser side is set by
+      # the build args above.
       REVERB_APP_ID: ${REVERB_APP_ID:-1001}
-      REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}   # must match the key baked into the published image
+      REVERB_APP_KEY: ${REVERB_APP_KEY:-trypost-reverb-key}   # also baked into the bundle via VITE_REVERB_APP_KEY
       REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET is required}
       REVERB_HOST: ${REVERB_HOST:-localhost}
       REVERB_PORT: ${REVERB_PORT:-8080}
@@ -115,13 +128,12 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
-    # No host ports: Coolify's proxy reaches these over the internal network.
-    # Assign domains in Coolify as https://<app-domain>:80 and
-    # https://<ws-domain>:8080. Outside Coolify, replace with
-    # ports: ["8000:80", "8080:8080"].
+    # No host ports: Coolify's proxy reaches nginx over the internal network.
+    # Set the app's domain in Coolify as https://<APP_DOMAIN>:80 — nginx serves
+    # both the app and the WebSocket (/app/). Outside Coolify, replace with
+    # ports: ["8000:80"].
     expose:
-      - "80"      # app (nginx)
-      - "8080"    # Reverb WebSocket
+      - "80"
     volumes:
       - storage:/var/www/html/storage/app
     # "coolify" is where Coolify-managed Postgres/Redis live, so the hosts in
